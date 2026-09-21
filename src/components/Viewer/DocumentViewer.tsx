@@ -25,13 +25,16 @@ import {
   Plus,
   Edit2,
   Check,
-  X
+  X,
+  PenTool
 } from 'lucide-react';
 import { DocumentItem, DocumentStatus } from '../../types';
 import { ImageViewer } from './ImageViewer';
 import { PdfViewer } from './PdfViewer';
 import { EpubViewer } from './EpubViewer';
 import { TextViewer } from './TextViewer';
+import { WordViewer } from './WordViewer';
+import { SignatureModal } from '../Modals/SignatureModal';
 
 interface DocumentViewerProps {
   document: DocumentItem | null;
@@ -44,6 +47,7 @@ interface DocumentViewerProps {
   onRenameDocument?: (id: string, newName: string) => void;
   onRenamePage?: (docId: string, pageIndex: number, newPageName: string) => void;
   onUpdateDocumentRotation?: (id: string, rotation: number, pageIndex?: number) => void;
+  onUpdateDocumentContent?: (docId: string, updatedUrl: string) => void;
   isReadOnly?: boolean;
 }
 
@@ -58,8 +62,10 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   onRenameDocument,
   onRenamePage,
   onUpdateDocumentRotation,
+  onUpdateDocumentContent,
   isReadOnly = false
 }) => {
+  const [isSignatureModalOpen, setIsSignatureModalOpen] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(1.0);
   const [rotation, setRotation] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -490,6 +496,17 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             </button>
           )}
 
+          {document.hasFile && (
+            <button
+              onClick={() => setIsSignatureModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-[#1a73e8] bg-[#e8f0fe] hover:bg-[#d2e3fc] border border-[#1a73e8]/30 rounded-lg transition-colors shadow-xs"
+              title="Affix digital signature to this document"
+            >
+              <PenTool className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sign</span>
+            </button>
+          )}
+
           <button
             onClick={toggleFullscreen}
             className="p-1.5 text-[#5f6368] hover:text-[#202124] hover:bg-[#f1f3f4] rounded-lg border border-[#dadce0] transition-colors"
@@ -726,6 +743,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
           return activePage.fileType === 'pdf' ? (
             <PdfViewer
+              key={`${document.id}_${activePage.url}_${activePageIndex}`}
               url={activePage.url}
               name={`${document.name} - ${activePage.name}`}
               zoom={zoom}
@@ -737,6 +755,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             />
           ) : ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(activePage.fileType) ? (
             <ImageViewer
+              key={`${document.id}_${activePage.url}_${activePageIndex}`}
               url={activePage.url}
               name={`${document.name} - ${activePage.name}`}
               zoom={zoom}
@@ -746,15 +765,24 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             />
           ) : activePage.fileType === 'epub' ? (
             <EpubViewer
+              key={`${document.id}_${activePage.url}_${activePageIndex}`}
               url={activePage.url}
               name={`${document.name} - ${activePage.name}`}
               zoom={zoom}
             />
-          ) : activePage.fileType === 'txt' ? (
-            <TextViewer
+          ) : activePage.fileType === 'docx' || activePage.fileType === 'doc' || activePage.fileType === 'txt' ? (
+            <WordViewer
+              key={`${document.id}_${activePage.url}_${activePageIndex}`}
               url={activePage.url}
               name={`${document.name} - ${activePage.name}`}
               zoom={zoom}
+              isReadOnly={isReadOnly}
+              onSaveContent={(updatedUrl) => {
+                if (onUpdateDocumentContent) {
+                  onUpdateDocumentContent(document.id, updatedUrl);
+                }
+              }}
+              onOpenSignature={() => setIsSignatureModalOpen(true)}
             />
           ) : (
             <div className="p-8 text-center bg-white border border-[#dadce0] rounded-2xl shadow-sm max-w-sm">
@@ -769,6 +797,23 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           );
         })()}
       </div>
+
+      {/* Digital Signature Modal */}
+      <SignatureModal
+        isOpen={isSignatureModalOpen}
+        onClose={() => setIsSignatureModalOpen(false)}
+        documentName={document.name}
+        onApplySignature={(sigDataUrl, signerName) => {
+          if (onUpdateStatus) {
+            onUpdateStatus(document.id, 'approved', `Digitally signed by ${signerName}`);
+          }
+          // Trigger download of signed stamp
+          const a = window.document.createElement('a');
+          a.href = sigDataUrl;
+          a.download = `${document.name.replace(/\.[^/.]+$/, '')}_Signature_${signerName.replace(/\s+/g, '_')}.png`;
+          a.click();
+        }}
+      />
     </div>
   );
 };

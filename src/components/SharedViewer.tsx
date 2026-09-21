@@ -708,7 +708,7 @@ export const SharedViewer: React.FC<SharedViewerProps> = ({
               onExportAsJpg={(doc) => exportAsJpg(doc)}
               onShare={() => {}}
               onUpdateStatus={onUpdateStatus}
-              isReadOnly={true}
+              isReadOnly={false}
             />
           </div>
         </div>

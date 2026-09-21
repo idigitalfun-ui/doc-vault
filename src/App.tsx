@@ -264,11 +264,14 @@ export function App() {
       });
   }, [documents, activeTab.id, searchQuery, sortOption]);
 
-  // Active document
+  // Active document strictly bound to the active tab
   const activeDoc = useMemo(() => {
-    if (!activeDocId) return tabDocuments.find(d => d.hasFile) || tabDocuments[0] || null;
-    return documents.find((d) => d.id === activeDocId) || null;
-  }, [documents, activeDocId, tabDocuments]);
+    if (activeDocId) {
+      const matchInTab = tabDocuments.find((d) => d.id === activeDocId);
+      if (matchInTab) return matchInTab;
+    }
+    return tabDocuments.find((d) => d.hasFile) || tabDocuments[0] || null;
+  }, [activeDocId, tabDocuments]);
 
   // Selected document objects
   const selectedDocuments = useMemo(() => {
@@ -614,6 +617,12 @@ export function App() {
     );
   };
 
+  const handleUpdateDocumentContent = (id: string, updatedUrl: string) => {
+    setDocuments((prev) =>
+      prev.map((doc) => (doc.id === id ? { ...doc, url: updatedUrl, updatedAt: new Date().toISOString() } : doc))
+    );
+  };
+
   const handleDeleteDocument = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm('Delete this document item?')) {
@@ -771,15 +780,13 @@ export function App() {
 
     // Merge document content so local file data is never missing or blank
     const sharedDocs = rawDocs.map((sd) => {
-      if (!sd.url) {
-        const localMatch = documents.find((d) => d.id === sd.id || d.name === sd.name);
-        if (localMatch && localMatch.url) {
-          return {
-            ...sd,
-            url: localMatch.url,
-            pages: (localMatch.pages && localMatch.pages.length > 0) ? localMatch.pages : sd.pages
-          };
-        }
+      const localMatch = documents.find((d) => d.id === sd.id || d.name === sd.name);
+      if (localMatch && localMatch.url) {
+        return {
+          ...sd,
+          url: localMatch.url,
+          pages: (localMatch.pages && localMatch.pages.length > 0) ? localMatch.pages : sd.pages
+        };
       }
       return sd;
     });
@@ -890,6 +897,8 @@ export function App() {
             onSelectTab={(id) => {
               setActiveTabId(id);
               setSelectedDocIds([]);
+              const firstInTab = documents.find((d) => d.collectionId === id && d.hasFile) || documents.find((d) => d.collectionId === id);
+              setActiveDocId(firstInTab ? firstInTab.id : null);
             }}
             onCreateTab={handleCreateTab}
             onRenameTab={handleRenameTab}
@@ -973,6 +982,7 @@ export function App() {
                 onRenameDocument={handleRenameDocument}
                 onRenamePage={handleRenamePage}
                 onUpdateDocumentRotation={handleUpdateDocumentRotation}
+                onUpdateDocumentContent={handleUpdateDocumentContent}
                 isReadOnly={false}
               />
             </div>

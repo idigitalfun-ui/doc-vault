@@ -1,4 +1,4 @@
-export type FileType = 'pdf' | 'png' | 'jpg' | 'jpeg' | 'epub' | 'txt' | 'other';
+export type FileType = 'pdf' | 'png' | 'jpg' | 'jpeg' | 'epub' | 'txt' | 'docx' | 'doc' | 'other';
 
 export type DocumentStatus = 'missing' | 'disapproved' | 'pending' | 'approved';
 

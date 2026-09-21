@@ -112,12 +112,12 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     const targetFolders = allTabFolders && allTabFolders.length > 0 ? allTabFolders : [];
     let payloadToSend = { share: newRecord, docs: payloadDocs, folders: targetFolders };
 
-    // If total payload exceeds 4MB, optimize document binaries to fit bytebin comfortably
+    // If total payload exceeds 8MB, only omit individual oversized files (>500KB)
     try {
-      if (JSON.stringify(payloadToSend).length > 4000000) {
-        const optimizedDocs = payloadDocs.map((d, i) => ({
+      if (JSON.stringify(payloadToSend).length > 8000000) {
+        const optimizedDocs = payloadDocs.map((d) => ({
           ...d,
-          url: i < 15 ? d.url : ''
+          url: (d.url && d.url.length > 500000) ? '' : d.url
         }));
         payloadToSend = { share: newRecord, docs: optimizedDocs, folders: targetFolders };
       }

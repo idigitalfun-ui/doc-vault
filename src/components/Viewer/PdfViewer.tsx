@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { ExternalLink, Layers, Sparkles, ArrowLeft } from 'lucide-react';
+import { Layers, Sparkles, AlertCircle, RefreshCw, Download, ChevronLeft, ChevronRight } from 'lucide-react';
 
 // Configure PDF.js worker
 if (typeof window !== 'undefined' && 'Worker' in window) {
@@ -12,9 +12,10 @@ interface PdfPageCanvasProps {
   pageNum: number;
   zoom: number;
   rotation: number;
+  isMobile: boolean;
 }
 
-const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({ pdfDoc, pageNum, zoom, rotation }) => {
+const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({ pdfDoc, pageNum, zoom, rotation, isMobile }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [rendering, setRendering] = useState(true);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -29,8 +30,9 @@ const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({ pdfDoc, pageNum, zoom, ro
         const page = await pdfDoc.getPage(pageNum);
         if (isCancelled) return;
 
-        // Base scale 1.4 gives high-DPI crispness on retina and modern screens
-        const viewport = page.getViewport({ scale: zoom * 1.4, rotation });
+        // Balanced scale: crisp rendering without mobile GPU crash
+        const scale = isMobile ? Math.min(zoom * 1.1, 1.6) : Math.min(zoom * 1.35, 2.0);
+        const viewport = page.getViewport({ scale, rotation });
         const canvas = canvasRef.current;
         if (!canvas || isCancelled) return;
 
@@ -65,18 +67,18 @@ const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({ pdfDoc, pageNum, zoom, ro
         renderTask.cancel();
       }
     };
-  }, [pdfDoc, pageNum, zoom, rotation]);
+  }, [pdfDoc, pageNum, zoom, rotation, isMobile]);
 
   return (
-    <div className="flex flex-col items-center mb-6 last:mb-2 w-full">
+    <div className="flex flex-col items-center mb-6 last:mb-2 w-full max-w-3xl">
       <div className="text-[11px] font-semibold text-[#5f6368] mb-1.5 bg-white/90 backdrop-blur-xs px-2.5 py-0.5 rounded-full border border-[#dadce0] shadow-xs">
         Page {pageNum} of {pdfDoc.numPages}
       </div>
       <div
         className="relative shadow-xl rounded-md bg-white border border-[#dadce0] overflow-hidden flex items-center justify-center transition-all duration-150"
         style={{
-          minWidth: dimensions ? `${Math.min(dimensions.width, 300)}px` : '300px',
-          minHeight: dimensions ? `${Math.min(dimensions.height, 400)}px` : '400px'
+          minWidth: dimensions ? `${Math.min(dimensions.width, 280)}px` : '280px',
+          minHeight: dimensions ? `${Math.min(dimensions.height, 380)}px` : '380px'
         }}
       >
         {rendering && (
@@ -115,14 +117,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   panOffset,
   onPanChange
 }) => {
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const singleCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [renderError, setRenderError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [viewMode, setViewMode] = useState<'continuous' | 'single' | 'native'>('continuous');
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'continuous' | 'single'>(isMobile ? 'single' : 'continuous');
+  const [activeSinglePage, setActiveSinglePage] = useState<number>(currentPage || 1);
+  const [maxPagesToShow, setMaxPagesToShow] = useState<number>(8); // Initial batch for performance
 
   // Helper to convert base64 data URI to Uint8Array
   const dataUriToUint8Array = (dataUri: string): Uint8Array => {
@@ -136,41 +142,19 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     return bytes;
   };
 
-  // Prepare a proper application/pdf Blob URL (Required by Chromium/Safari to prevent blank white iframe)
-  useEffect(() => {
-    let active = true;
-    let createdUrl: string | null = null;
-
-    const prepareBlob = async () => {
-      try {
-        if (url.startsWith('data:')) {
-          const bytes = dataUriToUint8Array(url);
-          const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' });
-          createdUrl = URL.createObjectURL(blob);
-          if (active) setBlobUrl(createdUrl);
-        } else {
-          if (active) setBlobUrl(url);
-        }
-      } catch (e) {
-        console.warn('Could not create PDF blob URL:', e);
-        if (active) setBlobUrl(url);
-      }
-    };
-
-    prepareBlob();
-
-    return () => {
-      active = false;
-      if (createdUrl) {
-        URL.revokeObjectURL(createdUrl);
-      }
-    };
-  }, [url]);
-
-  // Load PDF Document via PDF.js
+  // Load PDF Document via PDF.js with immediate cleanup on URL change
   useEffect(() => {
     let isCancelled = false;
+    setPdfDoc(null);
     setLoading(true);
+    setRenderError(null);
+    setActiveSinglePage(1);
+
+    if (!url) {
+      setRenderError('Document file is missing or still synchronizing.');
+      setLoading(false);
+      return;
+    }
 
     const loadPdf = async () => {
       try {
@@ -187,9 +171,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           setLoading(false);
         }
       } catch (err: any) {
-        console.warn('PDF.js canvas parse note:', err);
+        console.warn('PDF.js render note:', err);
         if (!isCancelled) {
-          setViewMode('native');
+          setRenderError('Unable to render PDF stream. Click download or retry.');
           setLoading(false);
         }
       }
@@ -210,8 +194,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
     const renderPage = async () => {
       try {
-        const page = await pdfDoc.getPage(currentPage);
-        const viewport = page.getViewport({ scale: zoom * 1.5, rotation });
+        const page = await pdfDoc.getPage(activeSinglePage);
+        const scale = isMobile ? Math.min(zoom * 1.1, 1.5) : zoom * 1.4;
+        const viewport = page.getViewport({ scale, rotation });
         const canvas = singleCanvasRef.current;
         if (!canvas) return;
 
@@ -242,7 +227,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         renderTask.cancel();
       }
     };
-  }, [pdfDoc, currentPage, zoom, rotation, viewMode]);
+  }, [pdfDoc, activeSinglePage, zoom, rotation, viewMode, isMobile]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (viewMode !== 'single') return;
@@ -266,11 +251,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setIsDragging(false);
   };
 
-  const openInNewTab = () => {
-    const targetUrl = blobUrl || url;
-    if (targetUrl) {
-      window.open(targetUrl, '_blank');
-    }
+  const handleDownload = () => {
+    if (!url) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name || 'document.pdf';
+    a.click();
   };
 
   return (
@@ -284,10 +270,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
               ? 'bg-[#1a73e8] text-white shadow-xs font-semibold'
               : 'text-[#5f6368] hover:text-[#202124] hover:bg-[#f1f3f4]'
           }`}
-          title="Scroll vertically through all PDF pages with mouse wheel"
+          title="Continuous vertical scroll through all pages"
         >
           <Layers className="w-3.5 h-3.5" />
-          <span>Continuous Scroll</span>
+          <span className="hidden sm:inline">Continuous Scroll</span>
+          <span className="sm:hidden">Scroll</span>
         </button>
 
         <button
@@ -297,23 +284,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
               ? 'bg-[#1a73e8] text-white shadow-xs font-semibold'
               : 'text-[#5f6368] hover:text-[#202124] hover:bg-[#f1f3f4]'
           }`}
-          title="Single page interactive canvas with zoom and pan"
+          title="Single page interactive canvas (Fastest on phone)"
         >
           <Sparkles className="w-3.5 h-3.5" />
-          <span>Single Page</span>
-        </button>
-
-        <button
-          onClick={() => setViewMode('native')}
-          className={`px-2.5 py-1 rounded-lg font-medium transition-colors flex items-center gap-1.5 ${
-            viewMode === 'native'
-              ? 'bg-[#1a73e8] text-white shadow-xs font-semibold'
-              : 'text-[#5f6368] hover:text-[#202124] hover:bg-[#f1f3f4]'
-          }`}
-          title="Open inside browser's native viewer"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-          <span>Native Browser</span>
+          <span className="hidden sm:inline">Single Page</span>
+          <span className="sm:hidden">Single</span>
         </button>
       </div>
 
@@ -321,109 +296,128 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       {loading && (
         <div className="w-full flex-1 flex flex-col items-center justify-center gap-2 text-[#5f6368]">
           <div className="w-8 h-8 border-3 border-[#1a73e8] border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs font-medium">Rendering PDF document...</p>
+          <p className="text-xs font-medium">Opening PDF...</p>
         </div>
       )}
 
-      {/* Mode 1: True Continuous Scroll View (PDF.js Canvas) */}
-      {!loading && viewMode === 'continuous' && (
+      {/* Error state (Never native browser fallback) */}
+      {!loading && renderError && (
+        <div className="w-full flex-1 flex flex-col items-center justify-center p-6 text-center">
+          <div className="bg-white border border-[#dadce0] rounded-3xl p-8 max-w-md shadow-md">
+            <div className="w-12 h-12 rounded-2xl bg-[#fce8e6] text-[#d93025] flex items-center justify-center mx-auto mb-3">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-sm text-[#202124] mb-1">{name}</h3>
+            <p className="text-xs text-[#5f6368] mb-4">{renderError}</p>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={() => {
+                  setLoading(true);
+                  setRenderError(null);
+                  setViewMode('single');
+                }}
+                className="px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry</span>
+              </button>
+              {url && (
+                <button
+                  onClick={handleDownload}
+                  className="px-4 py-2 bg-white border border-[#dadce0] hover:bg-[#f1f3f4] text-[#202124] rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>Download</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mode 1: Continuous Scroll View (Optimized Page Batching) */}
+      {!loading && !renderError && viewMode === 'continuous' && pdfDoc && (
         <div
           ref={containerRef}
           className="w-full flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 flex flex-col items-center"
         >
-          {pdfDoc &&
-            Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1).map((pageNum) => (
-              <PdfPageCanvas
-                key={`${url}_page_${pageNum}`}
-                pdfDoc={pdfDoc}
-                pageNum={pageNum}
-                zoom={zoom}
-                rotation={rotation}
-              />
-            ))}
-        </div>
-      )}
-
-      {/* Mode 2: Single Page Interactive Canvas */}
-      {!loading && viewMode === 'single' && (
-        <div
-          ref={containerRef}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          className={`w-full flex-1 flex items-center justify-center overflow-auto p-4 relative ${
-            isDragging ? 'cursor-grabbing' : 'cursor-grab'
-          }`}
-        >
-          <div
-            style={{
-              transform: `translate(${panOffset.x}px, ${panOffset.y}px)`,
-              transition: isDragging ? 'none' : 'transform 0.1s ease-out'
-            }}
-            className="flex justify-center"
-          >
-            <canvas
-              ref={singleCanvasRef}
-              className="shadow-2xl rounded-sm bg-white border border-[#dadce0] max-w-none"
-              style={{
-                maxHeight: zoom <= 1 ? '82vh' : 'none'
-              }}
+          {Array.from({ length: Math.min(pdfDoc.numPages, maxPagesToShow) }, (_, i) => i + 1).map((pageNum) => (
+            <PdfPageCanvas
+              key={`${url}_page_${pageNum}`}
+              pdfDoc={pdfDoc}
+              pageNum={pageNum}
+              zoom={zoom}
+              rotation={rotation}
+              isMobile={isMobile}
             />
-          </div>
+          ))}
+
+          {pdfDoc.numPages > maxPagesToShow && (
+            <button
+              onClick={() => setMaxPagesToShow((prev) => prev + 10)}
+              className="my-4 px-5 py-2.5 bg-white border border-[#dadce0] hover:border-[#1a73e8] text-[#1a73e8] rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+            >
+              <span>Load Next Pages ({pdfDoc.numPages - maxPagesToShow} remaining)...</span>
+            </button>
+          )}
         </div>
       )}
 
-      {/* Mode 3: Native Browser Mode with Blob URL & Direct Open Tab Option */}
-      {!loading && viewMode === 'native' && (
-        <div className="w-full flex-1 flex flex-col relative bg-[#525659]">
-          {/* Top Info Bar */}
-          <div className="bg-[#323639] text-white px-4 py-2 flex items-center justify-between text-xs z-10 select-none border-b border-[#202124]">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#34a853]" />
-              <span className="font-medium text-gray-200">Native Browser PDF Viewer</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={openInNewTab}
-                className="flex items-center gap-1.5 px-3 py-1 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-lg font-medium transition-colors shadow-xs"
-                title="Open this PDF full screen in a new browser tab"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open in New Tab</span>
-              </button>
-              <button
-                onClick={() => setViewMode('continuous')}
-                className="flex items-center gap-1 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-gray-200 rounded-lg transition-colors"
-                title="Return to Continuous Scroll View"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Continuous Scroll</span>
-              </button>
+      {/* Mode 2: Fast Single Page View with Page Switcher */}
+      {!loading && !renderError && viewMode === 'single' && pdfDoc && (
+        <div className="w-full flex-1 flex flex-col relative overflow-hidden">
+          <div
+            ref={containerRef}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            className={`w-full flex-1 flex items-center justify-center overflow-auto p-4 relative ${
+              isDragging ? 'cursor-grabbing' : 'cursor-grab'
+            }`}
+          >
+            <div
+              style={{
+                transform: `translate(${panOffset.x}px, ${panOffset.y}px)`,
+                transition: isDragging ? 'none' : 'transform 0.1s ease-out'
+              }}
+              className="flex justify-center"
+            >
+              <canvas
+                ref={singleCanvasRef}
+                className="shadow-2xl rounded-sm bg-white border border-[#dadce0] max-w-none"
+                style={{
+                  maxHeight: zoom <= 1 ? '78vh' : 'none'
+                }}
+              />
             </div>
           </div>
 
-          {/* Embedded Native Viewer Container */}
-          <div className="flex-1 w-full relative bg-[#525659]">
-            {blobUrl ? (
-              <object
-                data={`${blobUrl}#toolbar=1&navpanes=1`}
-                type="application/pdf"
-                className="absolute inset-0 w-full h-full"
+          {/* Bottom Page Navigation Controls */}
+          {pdfDoc.numPages > 1 && (
+            <div className="bg-white/95 backdrop-blur-xs border-t border-[#dadce0] py-2 px-4 flex items-center justify-center gap-3 z-10 select-none shadow-xs">
+              <button
+                disabled={activeSinglePage <= 1}
+                onClick={() => setActiveSinglePage((p) => Math.max(1, p - 1))}
+                className="p-1 rounded-lg border border-[#dadce0] hover:bg-[#f1f3f4] disabled:opacity-30 transition-colors"
+                title="Previous page"
               >
-                {/* Iframe fallback */}
-                <iframe
-                  src={`${blobUrl}#toolbar=1`}
-                  title={name}
-                  className="absolute inset-0 w-full h-full border-0"
-                />
-              </object>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-white gap-2">
-                <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                <p className="text-xs">Preparing PDF stream...</p>
-              </div>
-            )}
-          </div>
+                <ChevronLeft className="w-4 h-4 text-[#202124]" />
+              </button>
+
+              <span className="text-xs font-bold text-[#202124]">
+                Page {activeSinglePage} of {pdfDoc.numPages}
+              </span>
+
+              <button
+                disabled={activeSinglePage >= pdfDoc.numPages}
+                onClick={() => setActiveSinglePage((p) => Math.min(pdfDoc.numPages, p + 1))}
+                className="p-1 rounded-lg border border-[#dadce0] hover:bg-[#f1f3f4] disabled:opacity-30 transition-colors"
+                title="Next page"
+              >
+                <ChevronRight className="w-4 h-4 text-[#202124]" />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

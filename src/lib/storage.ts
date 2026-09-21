@@ -389,7 +389,9 @@ export const detectFileType = (filename: string, mimeType?: string): FileType =>
   if (ext === 'pdf' || mimeType?.includes('pdf')) return 'pdf';
   if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext || '')) return ext as FileType;
   if (ext === 'epub' || mimeType?.includes('epub')) return 'epub';
-  if (ext === 'txt' || mimeType?.includes('text')) return 'txt';
+  if (ext === 'docx' || mimeType?.includes('wordprocessingml')) return 'docx';
+  if (ext === 'doc' || mimeType?.includes('msword')) return 'doc';
+  if (ext === 'txt' || ext === 'md' || ext === 'csv' || mimeType?.includes('text')) return 'txt';
   return 'other';
 };
 
