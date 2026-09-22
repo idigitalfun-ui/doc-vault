@@ -118,6 +118,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             isDemoMode: false,
             role: data.user?.user_metadata?.role || 'admin'
           };
+
+          if (data.user?.id) {
+            try {
+              await supabase.from('profiles').upsert({
+                id: data.user.id,
+                email: data.user.email || email.trim(),
+                display_name: userProfile.displayName,
+                company_name: userProfile.companyName,
+                phone: userProfile.phone || ''
+              });
+            } catch {}
+          }
+
           onAuthenticated(userProfile);
         }
       } else {

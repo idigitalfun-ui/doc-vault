@@ -112,6 +112,52 @@ export const saveDocuments = (docs: DocumentItem[]) => {
 export const syncDocumentsToSupabase = async (docs: DocumentItem[]) => {
   if (!supabase) return;
   try {
+    const { data: authData } = await supabase.auth.getUser();
+    const currentUserId = authData?.user?.id;
+
+    let defaultClientId: string | null = null;
+    let defaultCollectionId: string | null = null;
+
+    if (currentUserId) {
+      // Ensure profile exists for foreign key
+      try {
+        await supabase.from('profiles').upsert({
+          id: currentUserId,
+          email: authData.user.email || '',
+          display_name: authData.user.user_metadata?.display_name || 'Solicitor'
+        });
+      } catch {}
+
+      // Ensure at least one client exists for foreign key
+      const { data: cData } = await supabase.from('clients').select('id').eq('solicitor_id', currentUserId).limit(1);
+      if (cData && cData.length > 0) {
+        defaultClientId = cData[0].id;
+      } else {
+        const { data: newClient } = await supabase.from('clients').insert({
+          solicitor_id: currentUserId,
+          name: 'General Client',
+          phone: 'N/A',
+          came_for: 'General Case'
+        }).select('id').maybeSingle();
+        if (newClient) defaultClientId = newClient.id;
+      }
+
+      // Ensure at least one collection exists for foreign key
+      if (defaultClientId) {
+        const { data: colData } = await supabase.from('collections').select('id').eq('solicitor_id', currentUserId).limit(1);
+        if (colData && colData.length > 0) {
+          defaultCollectionId = colData[0].id;
+        } else {
+          const { data: newCol } = await supabase.from('collections').insert({
+            solicitor_id: currentUserId,
+            client_id: defaultClientId,
+            name: 'All Documents'
+          }).select('id').maybeSingle();
+          if (newCol) defaultCollectionId = newCol.id;
+        }
+      }
+    }
+
     for (const doc of docs.slice(0, 30)) {
       const payload: any = {
         name: doc.name,
@@ -122,8 +168,16 @@ export const syncDocumentsToSupabase = async (docs: DocumentItem[]) => {
         status: doc.status || 'pending',
         notes: doc.notes || ''
       };
+      if (currentUserId) {
+        payload.solicitor_id = currentUserId;
+      }
+      if (defaultClientId) {
+        payload.client_id = defaultClientId;
+      }
       if (doc.collectionId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(doc.collectionId)) {
         payload.collection_id = doc.collectionId;
+      } else if (defaultCollectionId) {
+        payload.collection_id = defaultCollectionId;
       }
       if (doc.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(doc.id)) {
         payload.id = doc.id;
